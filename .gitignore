@@ -1,0 +1,91 @@
+# Environment
+.env
+*.env.local
+*.env.*.local
+venv/
+env/
+rag_env/
+.venv/
+ENV/
+
+# API Keys and Secrets
+*.key
+*.pem
+credentials.json
+token.json
+
+# Database and Vector Storage
+chroma_db/
+vectors/
+*.db
+*.sqlite
+*.sqlite3
+*.pkl
+*.pickle
+*.pt
+
+# Uploaded/Processed Files
+uploaded_pdfs/
+pdfs/
+*.pdf
+temp_*
+
+# Logs and Exports
+logs/
+exports/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing
+.coverage
+.pytest_cache/
+.tox/
+htmlcov/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+*.backup
+
+# Project specific
+processed.json
+cost_tracking.json
+claude_models_available.txt
+rag_backup_*/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation build
+docs/_build/
