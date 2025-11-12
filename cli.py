@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Import the simple RAG system (no ChromaDB)
+# Import the RAG system with in-memory vector storage
 from rag_simple import SimpleRAGSystem as M1OptimizedRAGSystem
 
 @click.group()

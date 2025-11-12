@@ -43,35 +43,69 @@ st.markdown("""
 
 # Initialize session state
 if 'rag_system' not in st.session_state:
+    llm_provider = os.getenv("LLM_PROVIDER", "claude").lower()
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key:
-        st.session_state.rag_system = M1OptimizedRAGSystem(
-            claude_api_key=api_key
-        )
-        st.session_state.cost_tracker = CostTracker()
-    else:
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:70b-instruct-q4_K_M")
+
+    try:
+        if llm_provider == "ollama":
+            st.session_state.rag_system = M1OptimizedRAGSystem(
+                llm_provider="ollama",
+                ollama_model=ollama_model
+            )
+            st.session_state.cost_tracker = CostTracker()
+        elif api_key:
+            st.session_state.rag_system = M1OptimizedRAGSystem(
+                claude_api_key=api_key,
+                llm_provider="claude"
+            )
+            st.session_state.cost_tracker = CostTracker()
+        else:
+            st.session_state.rag_system = None
+            st.session_state.cost_tracker = None
+    except Exception as e:
+        st.error(f"Failed to initialize RAG system: {e}")
         st.session_state.rag_system = None
         st.session_state.cost_tracker = None
 
 # Sidebar
 with st.sidebar:
     st.title("🚀 RAG System Control")
-    
-    # API Key setup
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        api_key = st.text_input("Claude API Key", type="password")
-        if st.button("Set API Key"):
-            if api_key:
-                os.environ["ANTHROPIC_API_KEY"] = api_key
-                st.session_state.rag_system = M1OptimizedRAGSystem(
-                    claude_api_key=api_key
-                )
-                st.session_state.cost_tracker = CostTracker()
-                st.success("API Key set successfully!")
-                st.rerun()
+
+    # LLM Provider Info
+    st.markdown("### 🤖 LLM Provider")
+    if st.session_state.rag_system:
+        provider = st.session_state.rag_system.llm_provider
+        if provider == "claude":
+            st.info("📡 Using Claude API")
+            model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+            st.text(f"Model: {model}")
+        elif provider == "ollama":
+            st.success("🖥️ Using Local LLM (Ollama)")
+            st.text(f"Model: {st.session_state.rag_system.ollama_model}")
+            st.caption("✅ Free & Private!")
     else:
-        st.success("✅ API Key configured")
-    
+        st.warning("No LLM configured")
+
+    # API Key setup (only if using Claude)
+    llm_provider = os.getenv("LLM_PROVIDER", "claude").lower()
+    if llm_provider == "claude":
+        st.markdown("### 🔑 Claude API Key")
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            api_key = st.text_input("Claude API Key", type="password")
+            if st.button("Set API Key"):
+                if api_key:
+                    os.environ["ANTHROPIC_API_KEY"] = api_key
+                    st.session_state.rag_system = M1OptimizedRAGSystem(
+                        claude_api_key=api_key,
+                        llm_provider="claude"
+                    )
+                    st.session_state.cost_tracker = CostTracker()
+                    st.success("API Key set successfully!")
+                    st.rerun()
+        else:
+            st.success("✅ API Key configured")
+
     # System info
     st.markdown("### 💻 System Info")
     sys_info = get_system_info()
@@ -88,29 +122,39 @@ with st.sidebar:
         st.metric("Storage Size", f"{stats['storage_size_mb']} MB")
         st.metric("Total Queries", stats['total_queries'])
     
-    # Cost tracking
-    if st.session_state.cost_tracker:
-        st.markdown("### 💰 Cost Tracking")
-        cost_stats = st.session_state.cost_tracker.get_statistics('today')
-        st.metric("Today's Cost", f"${cost_stats['total_cost']}")
-        
-        month_stats = st.session_state.cost_tracker.get_statistics('this_month')
-        st.metric("Month's Cost", f"${month_stats['total_cost']}")
-        
-        if month_stats.get('projected_monthly_cost'):
-            st.metric(
-                "Projected Monthly", 
-                f"${month_stats['projected_monthly_cost']}"
-            )
-        
-        # Alerts
-        alerts = st.session_state.cost_tracker.get_cost_alerts()
-        for alert in alerts:
-            st.warning(alert)
+    # Cost tracking (only for Claude API)
+    if st.session_state.cost_tracker and st.session_state.rag_system:
+        if st.session_state.rag_system.llm_provider == "claude":
+            st.markdown("### 💰 Cost Tracking")
+            cost_stats = st.session_state.cost_tracker.get_statistics('today')
+            st.metric("Today's Cost", f"${cost_stats['total_cost']}")
+
+            month_stats = st.session_state.cost_tracker.get_statistics('this_month')
+            st.metric("Month's Cost", f"${month_stats['total_cost']}")
+
+            if month_stats.get('projected_monthly_cost'):
+                st.metric(
+                    "Projected Monthly",
+                    f"${month_stats['projected_monthly_cost']}"
+                )
+
+            # Alerts
+            alerts = st.session_state.cost_tracker.get_cost_alerts()
+            for alert in alerts:
+                st.warning(alert)
+        else:
+            st.markdown("### 💰 Cost")
+            st.success("✅ Free (Local LLM)")
+            st.caption("No API costs when using Ollama!")
 
 # Main content
 st.title("🤖 Local RAG System - M1 Pro Optimized")
-st.markdown("### Powered by Chroma + Claude | 32GB RAM Optimized")
+if st.session_state.rag_system:
+    provider = st.session_state.rag_system.llm_provider
+    if provider == "ollama":
+        st.markdown("### Powered by Local LLM (Ollama) | 100% Free & Private")
+    else:
+        st.markdown("### Powered by Claude AI | M1 Optimized")
 
 # Check if system is initialized
 if not st.session_state.rag_system:
@@ -228,7 +272,8 @@ with tab2:
                         question,
                         stats['input_tokens'],
                         stats['output_tokens'],
-                        stats['model']
+                        stats['model'],
+                        stats['provider']
                     )
 
                 # Store results in session state
@@ -382,11 +427,20 @@ with tab4:
             st.session_state.rag_system.clear_database()
 
             # Reinitialize the RAG system to reflect the cleared state
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if api_key:
+            llm_provider = os.getenv("LLM_PROVIDER", "claude").lower()
+            if llm_provider == "ollama":
+                ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:70b-instruct-q4_K_M")
                 st.session_state.rag_system = M1OptimizedRAGSystem(
-                    claude_api_key=api_key
+                    llm_provider="ollama",
+                    ollama_model=ollama_model
                 )
+            else:
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if api_key:
+                    st.session_state.rag_system = M1OptimizedRAGSystem(
+                        claude_api_key=api_key,
+                        llm_provider="claude"
+                    )
 
             st.success("Database cleared successfully!")
             st.rerun()
@@ -476,10 +530,19 @@ with tab5:
     if st.button("Change Embedding Model"):
         st.warning("This will require reprocessing all documents")
         if st.checkbox("I understand"):
-            # Reinitialize with new model
-            st.session_state.rag_system = M1OptimizedRAGSystem(
-                claude_api_key=os.getenv("ANTHROPIC_API_KEY")
-            )
+            # Reinitialize with new model (preserving current LLM provider)
+            llm_provider = os.getenv("LLM_PROVIDER", "claude").lower()
+            if llm_provider == "ollama":
+                ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:70b-instruct-q4_K_M")
+                st.session_state.rag_system = M1OptimizedRAGSystem(
+                    llm_provider="ollama",
+                    ollama_model=ollama_model
+                )
+            else:
+                st.session_state.rag_system = M1OptimizedRAGSystem(
+                    claude_api_key=os.getenv("ANTHROPIC_API_KEY"),
+                    llm_provider="claude"
+                )
             st.success(f"Model changed to {selected_model}")
             st.rerun()
             

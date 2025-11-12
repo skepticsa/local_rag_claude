@@ -12,19 +12,47 @@ from anthropic import Anthropic
 import warnings
 warnings.filterwarnings('ignore')
 
+# Try to import ollama, but don't fail if not installed
+try:
+    import ollama
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SimpleRAGSystem:
-    """Simplified RAG System without ChromaDB"""
-    
-    def __init__(self, persist_directory: str = "./vectors", claude_api_key: Optional[str] = None):
-        """Initialize the RAG system"""
-        
+    """Hybrid RAG System supporting both Claude API and Local LLMs (Ollama)"""
+
+    def __init__(
+        self,
+        persist_directory: str = "./vectors",
+        claude_api_key: Optional[str] = None,
+        llm_provider: str = "claude",
+        ollama_model: str = "llama3.1:8b",
+        ollama_base_url: str = "http://localhost:11434"
+    ):
+        """
+        Initialize the RAG system
+
+        Args:
+            persist_directory: Directory to store vectors
+            claude_api_key: Anthropic API key (required if llm_provider="claude")
+            llm_provider: "claude" or "ollama"
+            ollama_model: Ollama model name (if using ollama)
+            ollama_base_url: Ollama server URL
+        """
+
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(exist_ok=True)
-        
+
+        # Set LLM provider
+        self.llm_provider = llm_provider.lower()
+        self.ollama_model = ollama_model
+        self.ollama_base_url = ollama_base_url
+
         # Check for M1 optimization
         if torch.backends.mps.is_available():
             self.device = "mps"
@@ -32,17 +60,28 @@ class SimpleRAGSystem:
         else:
             self.device = "cpu"
             logger.info("💻 Using CPU")
-        
+
         # Initialize embedding model
         logger.info("Loading embedding model...")
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        # Initialize Claude
+
+        # Initialize LLM based on provider
         self.anthropic = None
-        if claude_api_key:
-            self.anthropic = Anthropic(api_key=claude_api_key)
-            logger.info("✅ Claude API initialized")
-        
+        if self.llm_provider == "claude":
+            if claude_api_key:
+                self.anthropic = Anthropic(api_key=claude_api_key)
+                logger.info("✅ Claude API initialized")
+            else:
+                logger.warning("⚠️ Claude API key not provided")
+        elif self.llm_provider == "ollama":
+            if OLLAMA_AVAILABLE:
+                logger.info(f"✅ Ollama initialized (model: {self.ollama_model})")
+            else:
+                logger.error("❌ Ollama not installed. Install with: pip install ollama")
+                raise ImportError("Ollama package not found. Install with: pip install ollama")
+        else:
+            raise ValueError(f"Invalid llm_provider: {self.llm_provider}. Must be 'claude' or 'ollama'")
+
         # Simple in-memory storage
         self.documents = []
         self.embeddings = []
@@ -180,101 +219,140 @@ class SimpleRAGSystem:
         return results
     
     def query(self, question: str, n_results: int = 5) -> Tuple[str, List, Dict]:
-        """Query the RAG system"""
-        
-        if not self.anthropic:
+        """Query the RAG system using either Claude or Ollama"""
+
+        # Check if LLM is available
+        if self.llm_provider == "claude" and not self.anthropic:
             return "Please set Claude API key", [], {}
-        
+        elif self.llm_provider == "ollama" and not OLLAMA_AVAILABLE:
+            return "Ollama not installed", [], {}
+
         if not self.documents:
             return "No documents processed yet", [], {}
-        
+
         # Generate embedding for question
         query_embedding = self.embedder.encode([question])[0]
-        
+
         # Calculate similarities
         similarities = []
         embeddings_tensor = torch.tensor(self.embeddings)
         query_tensor = torch.tensor(query_embedding)
-        
+
         for i, doc_embedding in enumerate(embeddings_tensor):
             similarity = torch.nn.functional.cosine_similarity(
                 query_tensor.unsqueeze(0),
                 doc_embedding.unsqueeze(0)
             ).item()
             similarities.append((similarity, i))
-        
+
         # Get top results
         similarities.sort(reverse=True)
         top_indices = [idx for _, idx in similarities[:n_results]]
-        
+
         # Prepare context
         context_parts = []
         sources = []
-        
+
         for idx in top_indices:
             doc = self.documents[idx]
             meta = self.metadata[idx]
             context_parts.append(f"[{meta['source']}, Page {meta['page']}]\n{doc}")
             sources.append(meta)
-        
+
         context = "\n\n".join(context_parts)
-        
-        # Call Claude
+
+        # Create prompt
         prompt = f"""Based on the following context, answer the question.
-        
+
 Context:
 {context}
 
 Question: {question}
 
 Answer:"""
-        
+
         try:
-            # Get model from environment variable, with fallback to default
-            model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
-            max_tokens = int(os.getenv("MAX_TOKENS", "1000"))
-
-            response = self.anthropic.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            answer = response.content[0].text
-
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-
-            # Calculate cost based on model
-            if "sonnet" in model.lower():
-                input_cost_per_1k = 0.003
-                output_cost_per_1k = 0.015
-            elif "opus" in model.lower():
-                input_cost_per_1k = 0.015
-                output_cost_per_1k = 0.075
-            elif "haiku" in model.lower():
-                input_cost_per_1k = 0.00025
-                output_cost_per_1k = 0.00125
+            if self.llm_provider == "claude":
+                return self._query_claude(prompt, sources)
+            elif self.llm_provider == "ollama":
+                return self._query_ollama(prompt, sources)
             else:
-                # Default to Sonnet pricing
-                input_cost_per_1k = 0.003
-                output_cost_per_1k = 0.015
+                return f"Unknown provider: {self.llm_provider}", sources, {}
 
-            estimated_cost = (input_tokens / 1000 * input_cost_per_1k +
-                            output_tokens / 1000 * output_cost_per_1k)
-
-            stats = {
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-                'total_tokens': input_tokens + output_tokens,
-                'model': model,
-                'estimated_cost': estimated_cost
-            }
-            
-            return answer, sources, stats
-            
         except Exception as e:
+            logger.error(f"Query error: {e}")
             return f"Error: {e}", sources, {}
+
+    def _query_claude(self, prompt: str, sources: List) -> Tuple[str, List, Dict]:
+        """Query using Claude API"""
+        # Get model from environment variable, with fallback to default
+        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+        max_tokens = int(os.getenv("MAX_TOKENS", "1000"))
+
+        response = self.anthropic.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        answer = response.content[0].text
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+
+        # Calculate cost based on model
+        if "sonnet" in model.lower():
+            input_cost_per_1k = 0.003
+            output_cost_per_1k = 0.015
+        elif "opus" in model.lower():
+            input_cost_per_1k = 0.015
+            output_cost_per_1k = 0.075
+        elif "haiku" in model.lower():
+            input_cost_per_1k = 0.00025
+            output_cost_per_1k = 0.00125
+        else:
+            input_cost_per_1k = 0.003
+            output_cost_per_1k = 0.015
+
+        estimated_cost = (input_tokens / 1000 * input_cost_per_1k +
+                        output_tokens / 1000 * output_cost_per_1k)
+
+        stats = {
+            'provider': 'claude',
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'total_tokens': input_tokens + output_tokens,
+            'model': model,
+            'estimated_cost': estimated_cost
+        }
+
+        return answer, sources, stats
+
+    def _query_ollama(self, prompt: str, sources: List) -> Tuple[str, List, Dict]:
+        """Query using Ollama (local LLM)"""
+        response = ollama.chat(
+            model=self.ollama_model,
+            messages=[{
+                'role': 'user',
+                'content': prompt
+            }]
+        )
+
+        answer = response['message']['content']
+
+        # Ollama provides token counts in some responses
+        prompt_eval_count = response.get('prompt_eval_count', 0)
+        eval_count = response.get('eval_count', 0)
+
+        stats = {
+            'provider': 'ollama',
+            'input_tokens': prompt_eval_count,
+            'output_tokens': eval_count,
+            'total_tokens': prompt_eval_count + eval_count,
+            'model': self.ollama_model,
+            'estimated_cost': 0.0  # Local LLM is free!
+        }
+
+        return answer, sources, stats
     
     def get_statistics(self) -> Dict:
         """Get system statistics"""

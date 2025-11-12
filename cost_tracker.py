@@ -35,30 +35,39 @@ class CostTracker:
         question: str,
         input_tokens: int,
         output_tokens: int,
-        model: str = "claude-sonnet-4-5-20250929"
+        model: str = "claude-sonnet-4-5-20250929",
+        provider: str = "claude"
     ) -> Dict:
-        """Log a query and its cost"""
-        
-        # Calculate cost based on model
-        if "sonnet" in model:
+        """Log a query and its cost (or just tokens for local LLMs)"""
+
+        # Calculate cost based on provider and model
+        if provider == "ollama" or "llama" in model.lower() or "qwen" in model.lower() or "mistral" in model.lower():
+            # Local LLM - no cost!
+            cost = 0.0
+        elif "sonnet" in model:
             # Claude Sonnet 3.5, 4.0, and 4.5
             input_cost_per_1k = 0.003
             output_cost_per_1k = 0.015
+            cost = (input_tokens / 1000 * input_cost_per_1k +
+                   output_tokens / 1000 * output_cost_per_1k)
         elif "opus" in model:
             # Claude Opus 3.0 and 4.0
             input_cost_per_1k = 0.015
             output_cost_per_1k = 0.075
+            cost = (input_tokens / 1000 * input_cost_per_1k +
+                   output_tokens / 1000 * output_cost_per_1k)
         elif "haiku" in model:
             # Claude Haiku 3.0 and 3.5
             input_cost_per_1k = 0.00025
             output_cost_per_1k = 0.00125
+            cost = (input_tokens / 1000 * input_cost_per_1k +
+                   output_tokens / 1000 * output_cost_per_1k)
         else:
-            # Default to Sonnet pricing if unknown
+            # Default to Sonnet pricing if unknown Claude model
             input_cost_per_1k = 0.003
             output_cost_per_1k = 0.015
-        
-        cost = (input_tokens / 1000 * input_cost_per_1k + 
-                output_tokens / 1000 * output_cost_per_1k)
+            cost = (input_tokens / 1000 * input_cost_per_1k +
+                   output_tokens / 1000 * output_cost_per_1k)
         
         # Create query record
         query_record = {
